@@ -1,6 +1,3 @@
-# normal numbers 5
-# jack queen king 10
-# ace 20
 import random
 import numpy as np
 #human players of the game and agent
@@ -121,6 +118,23 @@ class actions:
     def chooseRandomCard(self,playerOn):
         x=random.choice(playerOn.deck)
         return x
+    
+    #Choose lowest point cards to do any of the above actions
+    def chooseLowCards(self,Environment,playerOn):
+        possibleCards=[0,0,0,0,0,0]
+        counter=0
+        for i in playerOn.deck:
+            if Environment.cardPoints.get(i)==5:
+                possibleCards[i]=i
+            elif possibleCards.count(0)==5 and Environment.cardPoints.get(i)==10:
+                possibleCards[counter]=i
+                counter+=1
+        #Last index shows the points gainable by each of the cards in the array
+        if possibleCards[0]>10:
+            possibleCards[5]=10
+        else:
+            possibleCards[5]=5        
+        return possibleCards
 
     #Checking which actions are possible
     def compilePossibleActions(self,playerOn,playerOff,center):
@@ -131,7 +145,8 @@ class actions:
         possibleActions=[0,0,1]
         possibleLock=[0,0]
         centerCardspossible=[]
-        opponentStealCard=1
+        opponentStealCard=-1
+        centerLockCard=0
 
         #Checking Steal from player
         for x in playerOn.deck:
@@ -150,9 +165,10 @@ class actions:
                     possibleActions[1]=1 
                     if playerOn.stack[-2] == j:
                         possibleLock[1]=1
+                        centerLockCard=j
                     if center.count(j)==3:
                         possibleLock[1]=1
-        return possibleActions,possibleLock,centerCardspossible,opponentStealCard
+        return possibleActions,possibleLock,centerCardspossible,opponentStealCard,centerLockCard
 
 class Environment:
     def __init__(self):
@@ -174,10 +190,9 @@ class Environment:
         self.randomActionChance=1
         self.learningrate=0.1
     
-    #Will run after action is done or when probing reward of 't+1' state
+    #Will run after action is done 
     def compileActionReward(self,Environment,playerOn,playerOff,center,deck,action): 
         #action=['action',cardThrown,cardsRemoved,bool] -- bool indicates whether action has occured
-        #previousLock=nearest index at which all the items before were locked
         reward=0
         if action[1] == 'stealPlayer':
             if action[3]==True:
@@ -205,10 +220,6 @@ class Environment:
                             break
                     #doubling reward for removing from opponent stack
                     reward+=Environment.cardPoints[card]*action[2]
-                    playerOn.previousLock=len(playerOn.stack)-1
-
-            elif action[3]==False:
-                pass
 
         elif action[1]=='stealCenter':
             if action[3]==True:
@@ -223,6 +234,7 @@ class Environment:
                         elif playerOn.stack.index(i)>playerOn.previousLock and i ==card:
                             reward+=Environment.cardPoints.get(i)
                             playerOn.stackRewardPerc.append(1)
+                    playerOn.previousLock=len(playerOn.stack)-1
                 #If lock isn't obtained
                 else:
                     for i in range(1,4):
@@ -231,9 +243,69 @@ class Environment:
                             playerOn.stackRewardPerc.append(0.5)
                         else:
                             break
-               
         elif action[1]=='throwCenter':
             pass
+        return reward
+    def compileEstimatedFutureReward(self,actions,agent,opponent,deck,center):
+        #cant compute exact reward since we dont know opponent action since it runs after opponent turn
+        reward=0
+        centerReward=0
+        stealReward=0
+        possibleActions,possibleLock,centerCardspossible,opponentStealCard,centerLockCard=actions.compilePossibleActions(agent,opponent,center)
+        #Throwing in center is only option
+        if possibleActions.count(0)==2:
+            reward=0
+        #If you can steal from player   
+        elif possibleActions[0]==1:
+            #if it results in a lock
+            if possibleLock[0]==1:
+                for i in agent.stack:
+                        #adds 100 percent of reward for all previoously un-locked cards to accumulator
+                    if agent.stack.index(i)>agent.previousLock and agent.stackRewardPerc[agent.stack.index(i)]!= 0 or 1:
+                            remainingRewardPerc=1-agent.stackRewardPerc[i]
+                            stealReward+=remainingRewardPerc*Environment.cardPoints.get(i)
+                    elif agent.stack.index(i) != agent.previousLock and i ==opponentStealCard:
+                            stealReward+=Environment.cardPoints.get(i)
+                    #doubling reward for removing from opponent stack
+                stealReward+=Environment.cardPoints[opponentStealCard]*3
+            else:
+            #If it doesnt result in a lock
+                for i in range(1,4):
+                    if agent.stack[-i]==opponentStealCard:
+                        #Only giving 50 percent reward initially
+                        stealReward+=(Environment.cardPoints.get(i)/0.5)
+                    else:
+                        break
+                #doubling reward for removing from opponent stack
+                    stealReward+=Environment.cardPoints[opponentStealCard]*3
+                
+        #If you can steal from center
+        if possibleActions[1]==1:
+            #if it results in a lock
+            if possibleLock[1]==1:
+                for i in agent.stack:
+                    #adds 100 percent of reward for all presviously un-locked cards to accumulator
+                    if agent.stack.index(i)>agent.previousLock and agent.stackRewardPerc[agent.stack.index(i)]!= 0 or 1:
+                        remainingRewardPerc=1-agent.stackRewardPerc[i]
+                        centerReward+=remainingRewardPerc*Environment.cardPoints.get(i)
+                    elif agent.stack.index(i)>agent.previousLock and i ==centerLockCard:
+                        centerReward+=Environment.cardPoints.get(i)
+            #If it doesnt result in a lock
+            else:
+                for i in centerCardspossible:
+                    x=center.count(i)*Environment.cardPoints.get(i)*0.5
+                    if x>centerReward:
+                        centerReward=x
+                pass
+
+        #Checking which reward is higher
+        if stealReward==0 and centerReward==0:
+            reward=0
+        elif stealReward>centerReward:
+            reward=stealReward
+        elif centerReward>stealReward:
+            reward=stealReward
+
         return reward
 
     #Will run after opponent does move to return positive/negative reward to agent
@@ -260,25 +332,28 @@ class Environment:
             #Making stack and rewardPerc lists identical in length
             for i in range(1,cardsStolen+1):
                 agent.stackRewardPerc.pop()
-
-
         #compute increasing reward for past action -- 50 percent intitial gain -- 74 percent after 3 turns -- 100 percent if lock
         for i in agent.stackRewardPerc:
             if i<0.74:
                 i+=0.08
                 reward+=0.08*Environment.cardPoints.get(agent.deck[i])
+    
     def checkStates(self,playerOn,deck):
         state=-1
 
         return state
-    def updateQtable(self,state,nextState,optimalAction,agent,RT1,learningRate,discountFactor,action):
+    
+    def updateQtable(self,state,nextState,optimalAction,agent,opponent,RT1,learningRate,discountFactor,action):
         Qtable=agent.qtable
         # Updated Q Value= Old Q-Value + learningRate*Temporal Difference
         Qtable[state,action]+=learningRate*(RT1+discountFactor(Qtable[nextState,optimalAction])-Qtable.iloc(state,action))
 
         return Qtable
     
-
+#compileestimateed future wreward is wrong
+#check states function
+#implement qtable update 
+#script
         
     
 
